@@ -88,6 +88,10 @@ export default defineConfig(({ mode }) => {
               const module = await import('./api/get-resume.js');
               return await module.default(mockReq, vercelRes);
             }
+            if (pathname === '/api/admin-upload-resume') {
+              const module = await import('./api/admin-upload-resume.js');
+              return await module.default(mockReq, vercelRes);
+            }
           } catch (err) {
             console.error('Dev server handler error:', err);
             res.statusCode = 500;

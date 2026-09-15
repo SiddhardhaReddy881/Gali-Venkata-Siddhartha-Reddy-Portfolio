@@ -1,6 +1,7 @@
-// Vercel Serverless Function: Stream Protected Resume PDF Only Upon Verified APPROVED Request Status
+// Vercel Serverless Function: Stream Protected Resume PDF from Vercel Private Blob Store
 import fs from 'fs';
 import path from 'path';
+import { get } from '@vercel/blob';
 import { verifySignedToken } from './utils/auth.js';
 import { getRequestRecord } from './utils/store.js';
 
@@ -15,7 +16,7 @@ export default async function handler(req, res) {
     });
   }
 
-  // Persistent storage double-check
+  // Persistent storage status check
   const record = await getRequestRecord(payload.requestId);
   if (!record || record.status !== 'APPROVED') {
     return res.status(403).json({
@@ -23,24 +24,43 @@ export default async function handler(req, res) {
     });
   }
 
-  // Access Granted! Stream private PDF file buffer
-  try {
-    const primaryPath = path.join(process.cwd(), 'private_assets', 'resume.pdf');
-    const fallbackPath = path.join(process.cwd(), 'src', 'assets', 'resume.pdf');
-    const filePath = fs.existsSync(primaryPath) ? primaryPath : fallbackPath;
+  const blobToken = process.env.BLOB_READ_WRITE_TOKEN;
 
-    if (!fs.existsSync(filePath)) {
-      return res.status(404).json({ error: 'Protected document file not found.' });
+  // Access Granted! Retrieve from Vercel Private Blob Store
+  try {
+    if (blobToken) {
+      const result = await get('private/resume.pdf', {
+        access: 'private',
+        token: blobToken
+      }).catch((err) => {
+        console.warn('Vercel Blob get error:', err.message);
+        return null;
+      });
+
+      if (result && result.stream) {
+        const arrayBuffer = await new Response(result.stream).arrayBuffer();
+        const fileBuffer = Buffer.from(arrayBuffer);
+
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', 'inline; filename="Gali_Venkata_Siddhardha_Reddy_Resume.pdf"');
+        res.setHeader('Cache-Control', 'private, no-store, max-age=0');
+        return res.status(200).send(fileBuffer);
+      }
     }
 
-    const fileBuffer = fs.readFileSync(filePath);
+    // Local development fallback if BLOB_READ_WRITE_TOKEN is not set or blob not yet uploaded
+    const localPath = path.join(process.cwd(), 'private_assets', 'resume.pdf');
+    if (fs.existsSync(localPath)) {
+      const fileBuffer = fs.readFileSync(localPath);
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', 'inline; filename="Gali_Venkata_Siddhardha_Reddy_Resume.pdf"');
+      res.setHeader('Cache-Control', 'private, no-store, max-age=0');
+      return res.status(200).send(fileBuffer);
+    }
 
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', 'inline; filename="Gali_Venkata_Siddhardha_Reddy_Resume.pdf"');
-    res.setHeader('Cache-Control', 'private, no-store, max-age=0');
-    return res.status(200).send(fileBuffer);
+    return res.status(404).json({ error: 'Protected resume document file not found in Blob store.' });
   } catch (err) {
-    console.error('Error serving protected resume file:', err);
+    console.error('Error retrieving protected resume file:', err);
     return res.status(500).json({ error: 'Failed to retrieve protected document.' });
   }
 }

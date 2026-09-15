@@ -1,7 +1,3 @@
 {
-  "functions": {
-    "api/get-resume.js": {
-      "includeFiles": "private_assets/**"
-    }
-  }
+  "framework": "vite"
 }
