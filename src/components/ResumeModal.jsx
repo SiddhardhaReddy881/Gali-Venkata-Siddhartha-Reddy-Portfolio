@@ -1,22 +1,33 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, Lock, CheckCircle2, FileText, ArrowRight, MailCheck, KeyRound, ShieldCheck } from 'lucide-react';
-import resumePdf from '../assets/resume.pdf';
+import { X, Lock, CheckCircle2, FileText, ArrowRight, MailCheck, KeyRound, ShieldAlert, Mail, Clock, XCircle } from 'lucide-react';
 import { modalBackdropVariants, modalContainerVariants } from '../utils/animations';
 import { personalDetails } from '../data/portfolioData';
 
 export default function ResumeModal({ isOpen, onClose }) {
-  const [step, setStep] = useState(1); // 1: Form, 2: Access Request Registered (Pending Owner Approval), 3: Approved & Unlocked
+  // Steps: 
+  // 1: Form (Request Resume)
+  // 2: Verify Email (Enter Visitor OTP)
+  // 3: Pending Owner Approval (Waiting / Polling)
+  // 4: Approved (View / Download Access)
+  // 5: Rejected (Access Denied)
+  const [step, setStep] = useState(1);
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [purpose, setPurpose] = useState('');
-  const [pinInput, setPinInput] = useState('');
+  const [visitorOtp, setVisitorOtp] = useState('');
+  
   const [errors, setErrors] = useState({});
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState('');
-  const [pinError, setPinError] = useState('');
+  const [verifyError, setVerifyError] = useState('');
 
-  const [activeOtp, setActiveOtp] = useState('');
+  const [verificationToken, setVerificationToken] = useState('');
+  const [statusCheckToken, setStatusCheckToken] = useState('');
+  const [approvedAccessUrl, setApprovedAccessUrl] = useState('');
+  const [unlockedBlobUrl, setUnlockedBlobUrl] = useState('');
+
+  const pollingRef = useRef(null);
 
   useEffect(() => {
     const handleKeyDown = (e) => {
@@ -28,6 +39,44 @@ export default function ResumeModal({ isOpen, onClose }) {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isOpen]);
 
+  // Status Polling when in Step 3 (Pending)
+  useEffect(() => {
+    if (step === 3 && statusCheckToken) {
+      const checkStatus = async () => {
+        try {
+          const res = await fetch(`/api/resume-status?token=${encodeURIComponent(statusCheckToken)}`);
+          if (res.ok) {
+            const data = await res.json();
+            if (data.status === 'APPROVED' && data.accessUrl) {
+              setApprovedAccessUrl(data.accessUrl);
+              // Fetch PDF blob securely for seamless viewing/downloading in UI
+              const pdfRes = await fetch(data.accessUrl);
+              if (pdfRes.ok) {
+                const blob = await pdfRes.blob();
+                const blobUrl = URL.createObjectURL(blob);
+                setUnlockedBlobUrl(blobUrl);
+              }
+              setStep(4);
+            } else if (data.status === 'REJECTED') {
+              setStep(5);
+            }
+          }
+        } catch (err) {
+          console.warn('Status polling error:', err);
+        }
+      };
+
+      checkStatus();
+      pollingRef.current = setInterval(checkStatus, 3000);
+    } else {
+      if (pollingRef.current) clearInterval(pollingRef.current);
+    }
+
+    return () => {
+      if (pollingRef.current) clearInterval(pollingRef.current);
+    };
+  }, [step, statusCheckToken]);
+
   const isValidAuthenticEmail = (emailStr) => {
     if (!emailStr || typeof emailStr !== 'string') return false;
     const clean = emailStr.trim().toLowerCase();
@@ -36,28 +85,24 @@ export default function ResumeModal({ isOpen, onClose }) {
     const [username, domain] = clean.split('@');
     if (!username || !domain) return false;
 
-    // Block dummy / fake email domains
     const blockedDomains = [
       'hi.com', 'hello.com', 'test.com', 'example.com', 'fake.com',
       'temp.com', 'asdf.com', '123.com', 'xyz.com', 'abc.com',
-      'foo.bar', 'domain.com', 'sample.com', 'mailinator.com', 'yopmail.com'
+      'foo.bar', 'domain.com', 'sample.com', 'mailinator.com', 'yopmail.com',
+      'guerrillamail.com', 'tempmail.com', 'dispostable.com'
     ];
 
-    if (blockedDomains.includes(domain)) return false;
-    if (domain.startsWith('test') || domain.startsWith('fake') || domain.startsWith('temp')) return false;
+    if (blockedDomains.includes(domain) || domain.startsWith('test') || domain.startsWith('temp')) return false;
 
-    // Block keyboard mashing & gibberish usernames
     const keyMashPatterns = [
       /qwerty/i, /asdfgh/i, /zxcvbn/i, /12345/i, /fhusfh/i, /fghj/i,
-      /(.)\1{4,}/i // 5+ same repeated characters e.g. aaaaaa
+      /(.)\1{4,}/i
     ];
     if (keyMashPatterns.some((pattern) => pattern.test(username))) return false;
 
-    // Block 5+ consecutive consonants in a row (e.g. fhusfhubgbhbfg)
     const consecutiveConsonants = /[^aeiouy0-9._-]{5,}/i;
     if (consecutiveConsonants.test(username)) return false;
 
-    // Minimum vowel ratio check for non-numeric usernames > 6 chars
     if (username.length > 6 && !/[0-9._-]/.test(username)) {
       const vowels = (username.match(/[aeiouy]/gi) || []).length;
       if (vowels === 0 || (vowels / username.length) < 0.15) return false;
@@ -78,73 +123,92 @@ export default function ResumeModal({ isOpen, onClose }) {
     return Object.keys(newErrors).length === 0;
   };
 
+  // Step 1: Submit Form & Send Email Verification OTP to Visitor
   const handleRequestSubmit = async (e) => {
     e.preventDefault();
     setSubmitError('');
     if (!validateForm()) return;
 
     setIsSubmitting(true);
-    // Generate a unique 6-digit random OTP for this access request
-    const generatedOtp = Math.floor(100000 + Math.random() * 900000).toString();
-    setActiveOtp(generatedOtp);
-
-    const endpoint = '/api/resume-request';
-
     try {
-      const response = await fetch(endpoint, {
+      const response = await fetch('/api/resume-request', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           name,
           email,
-          purpose: purpose || 'Internship / Recruitment Evaluation',
-          otp: generatedOtp,
-          requestedAt: new Date().toISOString()
+          purpose: purpose || 'Internship / Recruitment Evaluation'
         }),
       });
 
-      if (response.ok || response.status === 404) {
-        setStep(2); // Move to Pending Approval notification step
+      const resData = await response.json().catch(() => ({}));
+      if (response.ok && resData.token) {
+        setVerificationToken(resData.token);
+        setStep(2); // Move to Step 2: Verify Email OTP
       } else {
-        const errorData = await response.json().catch(() => ({}));
-        setSubmitError(errorData.error || 'Failed to submit request to backend.');
+        setSubmitError(resData.error || 'Failed to send email verification code.');
       }
     } catch (err) {
-      console.warn('Backend API request error, proceeding with request registration fallback:', err);
-      setStep(2); // Proceed to Pending Approval step
+      console.warn('Request submit error:', err);
+      setSubmitError('Unable to send verification code. Please check your internet connection.');
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  const handleVerifyPin = (e) => {
+  // Step 2: Verify Visitor Email OTP
+  const handleVerifyVisitorEmail = async (e) => {
     e.preventDefault();
-    setPinError('');
+    setVerifyError('');
 
-    const cleanPin = pinInput.trim();
-
-    if (!cleanPin) {
-      setPinError('Please enter the 6-digit authorization OTP.');
+    if (!visitorOtp.trim()) {
+      setVerifyError('Please enter the 6-digit verification code sent to your email.');
       return;
     }
 
-    if (activeOtp && cleanPin === activeOtp) {
-      setStep(3); // Granted download access
-    } else {
-      setPinError('Invalid OTP code. Please enter the exact 6-digit OTP sent to the owner email.');
+    setIsSubmitting(true);
+    try {
+      const response = await fetch('/api/verify-email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          token: verificationToken,
+          otp: visitorOtp.trim()
+        })
+      });
+
+      const resData = await response.json().catch(() => ({}));
+      if (response.ok && resData.token) {
+        setStatusCheckToken(resData.token);
+        setStep(3); // Move to Step 3: Pending Owner Approval
+      } else {
+        setVerifyError(resData.error || 'Invalid verification code. Please enter the exact code sent to your email.');
+      }
+    } catch (err) {
+      console.error('Email verification error:', err);
+      setVerifyError('Failed to verify code with server.');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
   const handleReset = () => {
+    if (pollingRef.current) clearInterval(pollingRef.current);
     setStep(1);
     setName('');
     setEmail('');
     setPurpose('');
-    setPinInput('');
-    setActiveOtp('');
+    setVisitorOtp('');
+    setVerificationToken('');
+    setStatusCheckToken('');
+    setApprovedAccessUrl('');
+    if (unlockedBlobUrl) {
+      URL.revokeObjectURL(unlockedBlobUrl);
+      setUnlockedBlobUrl('');
+    }
     setErrors({});
     setSubmitError('');
-    setPinError('');
+    setVerifyError('');
     onClose();
   };
 
@@ -191,12 +255,12 @@ export default function ResumeModal({ isOpen, onClose }) {
                   Resume Access Request
                 </h3>
                 <p className="text-xs text-slate-500 dark:text-slate-400">
-                  Owner approval & verification required for document access
+                  Email verification & owner approval required
                 </p>
               </div>
             </div>
 
-            {/* Step 1: Access Request Form */}
+            {/* STEP 1: Request Resume */}
             {step === 1 && (
               <form onSubmit={handleRequestSubmit} className="space-y-4">
                 <div>
@@ -215,7 +279,7 @@ export default function ResumeModal({ isOpen, onClose }) {
 
                 <div>
                   <label className="block text-xs font-semibold uppercase tracking-wider text-slate-700 dark:text-slate-300 mb-1 font-mono-tech">
-                    Your Email Address <span className="text-cyan-400">*</span>
+                    Email Address <span className="text-cyan-400">*</span>
                   </label>
                   <input
                     type="email"
@@ -252,7 +316,7 @@ export default function ResumeModal({ isOpen, onClose }) {
                       <span className="inline-block animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent"></span>
                     ) : (
                       <>
-                        <span>Request Resume Access</span>
+                        <span>Send Verification OTP</span>
                         <ArrowRight className="w-4 h-4" />
                       </>
                     )}
@@ -261,46 +325,77 @@ export default function ResumeModal({ isOpen, onClose }) {
               </form>
             )}
 
-            {/* Step 2: Request Pending Owner Approval */}
+            {/* STEP 2: Verify Email */}
             {step === 2 && (
               <div className="space-y-4 py-2">
-                <div className="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-xs text-slate-800 dark:text-slate-200 space-y-2">
-                  <div className="flex items-center space-x-2 text-amber-600 dark:text-amber-400 font-bold font-mono-tech">
-                    <MailCheck className="w-4 h-4" />
-                    <span>Access Request Sent — Status: PENDING</span>
+                <div className="p-4 rounded-2xl bg-cyan-500/10 border border-cyan-500/30 text-xs text-slate-800 dark:text-slate-200 space-y-2">
+                  <div className="flex items-center space-x-2 text-cyan-600 dark:text-cyan-400 font-bold font-mono-tech">
+                    <Mail className="w-4 h-4" />
+                    <span>Email Verification OTP Sent</span>
                   </div>
                   <p>
-                    Resume access request registered for <strong>{name}</strong> (<code>{email}</code>). Notification email dispatched to owner <strong>GALI VENKATA SIDDHARTHA REDDY</strong> (<code>{personalDetails.email}</code>).
+                    A 6-digit verification code was sent to <strong>{email}</strong>. Please check your inbox and enter the code below to verify your email.
                   </p>
                 </div>
 
-                <form onSubmit={handleVerifyPin} className="space-y-3 pt-1">
+                <form onSubmit={handleVerifyVisitorEmail} className="space-y-3 pt-1">
                   <label className="block text-xs font-semibold uppercase tracking-wider text-slate-700 dark:text-slate-300 font-mono-tech flex items-center space-x-1.5">
                     <KeyRound className="w-3.5 h-3.5 text-cyan-400" />
-                    <span>Enter 6-Digit Verification OTP</span>
+                    <span>Enter Verification OTP</span>
                   </label>
                   <div className="flex space-x-2">
                     <input
                       type="text"
-                      value={pinInput}
-                      onChange={(e) => setPinInput(e.target.value)}
+                      value={visitorOtp}
+                      onChange={(e) => setVisitorOtp(e.target.value)}
                       placeholder="Enter 6-digit OTP"
                       className="flex-1 px-4 py-2.5 rounded-xl glass-input text-sm text-slate-900 dark:text-slate-100 tracking-wider font-mono-tech"
                     />
                     <button
                       type="submit"
-                      className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 text-white font-semibold text-xs tracking-wide shadow-md"
+                      disabled={isSubmitting}
+                      className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 text-white font-semibold text-xs tracking-wide shadow-md disabled:opacity-50"
                     >
-                      Verify
+                      {isSubmitting ? 'Verifying...' : 'Verify OTP'}
                     </button>
                   </div>
-                  {pinError && <p className="text-xs text-rose-500">{pinError}</p>}
+                  {verifyError && <p className="text-xs text-rose-500">{verifyError}</p>}
                 </form>
               </div>
             )}
 
-            {/* Step 3: Approved Access Unlocked */}
+            {/* STEP 3: Pending Approval */}
             {step === 3 && (
+              <div className="space-y-5 py-3 text-center">
+                <div className="w-14 h-14 rounded-full bg-amber-500/20 border border-amber-500/40 text-amber-400 mx-auto flex items-center justify-center shadow-lg shadow-amber-500/20 relative">
+                  <Clock className="w-7 h-7 animate-pulse" />
+                </div>
+
+                <div className="space-y-2">
+                  <div className="inline-flex items-center space-x-1.5 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs font-mono-tech">
+                    <MailCheck className="w-3.5 h-3.5" />
+                    <span>Your email has been verified.</span>
+                  </div>
+                  <h4 className="text-base font-bold text-slate-900 dark:text-white font-mono-tech pt-1">
+                    Pending Owner Approval
+                  </h4>
+                  <p className="text-xs text-slate-600 dark:text-slate-300 max-w-xs mx-auto">
+                    Your resume access request is pending owner approval. A notification has been dispatched to <strong>GALI VENKATA SIDDHARDHA REDDY</strong>.
+                  </p>
+                </div>
+
+                <div className="p-3 rounded-xl bg-slate-900/60 border border-slate-800 text-xs text-slate-400 flex items-center justify-center space-x-2">
+                  <span className="relative flex h-2 w-2">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500"></span>
+                  </span>
+                  <span>Waiting for owner approval... This window updates automatically.</span>
+                </div>
+              </div>
+            )}
+
+            {/* STEP 4: Approved */}
+            {step === 4 && (
               <div className="text-center py-4 space-y-5">
                 <div className="w-14 h-14 rounded-full bg-emerald-500/20 border border-emerald-500/40 text-emerald-400 mx-auto flex items-center justify-center shadow-lg shadow-emerald-500/20">
                   <CheckCircle2 className="w-8 h-8" />
@@ -308,31 +403,65 @@ export default function ResumeModal({ isOpen, onClose }) {
 
                 <div>
                   <h4 className="text-lg font-bold text-slate-900 dark:text-white font-mono-tech">
-                    Access Granted & Approved
+                    Access Approved
                   </h4>
                   <p className="text-xs text-slate-600 dark:text-slate-300 mt-1">
-                    Resume document access unlocked for <strong className="text-cyan-400">{email}</strong>.
+                    Your resume access has been approved. You can view or download the resume below.
                   </p>
                 </div>
 
                 <div className="pt-2 flex flex-col sm:flex-row gap-3 justify-center">
-                  <a
-                    href={resumePdf}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="px-5 py-3 rounded-xl bg-gradient-to-r from-cyan-500 via-blue-600 to-purple-600 hover:from-cyan-400 hover:to-purple-500 text-white font-bold text-xs tracking-wide shadow-lg shadow-cyan-500/25 flex items-center justify-center space-x-2"
-                  >
-                    <FileText className="w-4 h-4" />
-                    <span>VIEW RESUME (PDF)</span>
-                  </a>
+                  {unlockedBlobUrl || approvedAccessUrl ? (
+                    <>
+                      <a
+                        href={unlockedBlobUrl || approvedAccessUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="px-5 py-3 rounded-xl bg-gradient-to-r from-cyan-500 via-blue-600 to-purple-600 hover:from-cyan-400 hover:to-purple-500 text-white font-bold text-xs tracking-wide shadow-lg shadow-cyan-500/25 flex items-center justify-center space-x-2"
+                      >
+                        <FileText className="w-4 h-4" />
+                        <span>VIEW RESUME (PDF)</span>
+                      </a>
 
-                  <a
-                    href={resumePdf}
-                    download="Gali_Venkata_Siddhartha_Reddy_Resume.pdf"
-                    className="px-5 py-3 rounded-xl glass-card text-slate-900 dark:text-slate-100 hover:border-cyan-400 font-bold text-xs tracking-wide flex items-center justify-center space-x-2"
+                      <a
+                        href={unlockedBlobUrl || approvedAccessUrl}
+                        download="Gali_Venkata_Siddhardha_Reddy_Resume.pdf"
+                        className="px-5 py-3 rounded-xl glass-card text-slate-900 dark:text-slate-100 hover:border-cyan-400 font-bold text-xs tracking-wide flex items-center justify-center space-x-2"
+                      >
+                        <span>DOWNLOAD RESUME</span>
+                      </a>
+                    </>
+                  ) : null}
+                </div>
+              </div>
+            )}
+
+            {/* STEP 5: Rejected */}
+            {step === 5 && (
+              <div className="text-center py-4 space-y-5">
+                <div className="w-14 h-14 rounded-full bg-rose-500/20 border border-rose-500/40 text-rose-400 mx-auto flex items-center justify-center shadow-lg shadow-rose-500/20">
+                  <XCircle className="w-8 h-8" />
+                </div>
+
+                <div className="space-y-2">
+                  <h4 className="text-lg font-bold text-slate-900 dark:text-white font-mono-tech">
+                    Access Rejected
+                  </h4>
+                  <p className="text-xs text-rose-400 dark:text-rose-300 max-w-xs mx-auto font-semibold">
+                    Your resume access request was rejected.
+                  </p>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 max-w-xs mx-auto">
+                    The document owner has declined access for this email address.
+                  </p>
+                </div>
+
+                <div className="pt-2">
+                  <button
+                    onClick={handleReset}
+                    className="px-6 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold"
                   >
-                    <span>DOWNLOAD RESUME</span>
-                  </a>
+                    Close
+                  </button>
                 </div>
               </div>
             )}
@@ -343,3 +472,4 @@ export default function ResumeModal({ isOpen, onClose }) {
     </AnimatePresence>
   );
 }
+

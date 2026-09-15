@@ -27,3 +27,11 @@ dist-ssr
 .env
 .env.*
 !.env.example
+
+# Private Server-Only Assets
+private_assets/
+
+
+# Private/local files
+scratch/
+src/assets/certificates/passwords of level bandit.txt
