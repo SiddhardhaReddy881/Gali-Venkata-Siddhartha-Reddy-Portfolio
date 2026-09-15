@@ -92,9 +92,9 @@ export default function ContactSection() {
         setSubmittedStatus('success');
       }
     } catch (err) {
-      console.warn('Backend API submission error:', err);
-      // If dev server or environment doesn't run Vercel serverless function directly, show clear status:
-      setSubmittedStatus('success');
+      console.error('Backend API submission error:', err);
+      setErrorMessage('Network or server error. Unable to deliver your message right now.');
+      setSubmittedStatus('error');
     } finally {
       setIsSubmitting(false);
     }
