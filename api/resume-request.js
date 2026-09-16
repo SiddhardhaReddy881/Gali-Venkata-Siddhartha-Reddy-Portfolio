@@ -44,17 +44,33 @@ export default async function handler(req, res) {
     exp
   });
 
-  const brevoApiKey = process.env.BREVO_API_KEY || '';
-  const brevoFromEmail = process.env.BREVO_FROM_EMAIL || '';
-  const brevoFromName = process.env.BREVO_FROM_NAME || 'Resume Verification';
+  const brevoApiKey = (
+    process.env.BREVO_API_KEY ||
+    process.env.BREVO_KEY ||
+    process.env.BREVO_API_TOKEN ||
+    ''
+  ).trim().replace(/^["']|["']$/g, '');
+
+  const brevoFromEmail = (
+    process.env.BREVO_FROM_EMAIL ||
+    process.env.BREVO_SENDER_EMAIL ||
+    process.env.MAILERSEND_FROM_EMAIL ||
+    ''
+  ).trim().replace(/^["']|["']$/g, '');
+
+  const brevoFromName = (
+    process.env.BREVO_FROM_NAME ||
+    process.env.BREVO_SENDER_NAME ||
+    'Resume Verification'
+  ).trim().replace(/^["']|["']$/g, '');
 
   if (!brevoApiKey) {
-    console.error('Brevo API Error: BREVO_API_KEY is missing.');
-    return res.status(500).json({ error: 'Email service key is not configured on the server.' });
+    console.error('Brevo API Error: BREVO_API_KEY is missing or empty on server environment.');
+    return res.status(500).json({ error: 'Email service key (BREVO_API_KEY) is not configured on the server.' });
   }
 
   if (!brevoFromEmail) {
-    console.error('Brevo API Error: BREVO_FROM_EMAIL is missing.');
+    console.error('Brevo API Error: BREVO_FROM_EMAIL is missing or empty on server environment.');
     return res.status(500).json({ error: 'Email sender address (BREVO_FROM_EMAIL) is not configured on the server.' });
   }
 
@@ -77,6 +93,7 @@ export default async function handler(req, res) {
       method: 'POST',
       headers: {
         'api-key': brevoApiKey,
+        'api_key': brevoApiKey,
         'accept': 'application/json',
         'content-type': 'application/json',
       },
@@ -100,8 +117,14 @@ export default async function handler(req, res) {
 
     if (!brevoRes.ok) {
       console.error('Brevo API error sending OTP:', brevoRes.status, resData);
+
+      let userError = 'Failed to send verification email. Please check your recipient email address or try again later.';
+      if (brevoRes.status === 401 || brevoRes.status === 403 || resData.code === 'key_not_found') {
+        userError = 'Email provider authentication failed. Please verify BREVO_API_KEY on the server environment.';
+      }
+
       return res.status(brevoRes.status || 500).json({
-        error: resData.message || 'Failed to send verification email. Please verify your recipient email address.'
+        error: userError
       });
     }
 
