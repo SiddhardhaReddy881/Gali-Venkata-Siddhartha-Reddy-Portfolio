@@ -56,6 +56,6 @@ export default async function handler(req, res) {
     });
   } catch (err) {
     console.error('Error uploading private resume to Blob store:', err);
-    return res.status(500).json({ error: 'Failed to upload resume to Private Blob Store.' });
+    return res.status(500).json({ error: 'Failed to upload resume to Private Blob Store.', details: err.message || String(err) });
   }
 }
