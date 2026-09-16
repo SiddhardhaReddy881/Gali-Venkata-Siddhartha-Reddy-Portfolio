@@ -43,7 +43,9 @@ export default async function handler(req, res) {
 
         res.setHeader('Content-Type', 'application/pdf');
         res.setHeader('Content-Disposition', 'inline; filename="Gali_Venkata_Siddhardha_Reddy_Resume.pdf"');
-        res.setHeader('Cache-Control', 'private, no-store, max-age=0');
+        res.setHeader('Cache-Control', 'private, no-cache, no-store, must-revalidate, max-age=0, s-maxage=0');
+        res.setHeader('Pragma', 'no-cache');
+        res.setHeader('Expires', '0');
         return res.status(200).send(fileBuffer);
       }
     }
@@ -54,7 +56,9 @@ export default async function handler(req, res) {
       const fileBuffer = fs.readFileSync(localPath);
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader('Content-Disposition', 'inline; filename="Gali_Venkata_Siddhardha_Reddy_Resume.pdf"');
-      res.setHeader('Cache-Control', 'private, no-store, max-age=0');
+      res.setHeader('Cache-Control', 'private, no-cache, no-store, must-revalidate, max-age=0, s-maxage=0');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
       return res.status(200).send(fileBuffer);
     }
 
