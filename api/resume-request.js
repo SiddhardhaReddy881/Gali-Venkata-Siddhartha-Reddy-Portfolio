@@ -44,21 +44,19 @@ export default async function handler(req, res) {
     exp
   });
 
-  const mailerSendToken = process.env.MAILERSEND_API_TOKEN || '';
-  const mailerSendFrom = process.env.MAILERSEND_FROM_EMAIL || '';
+  const brevoApiKey = process.env.BREVO_API_KEY || '';
+  const brevoFromEmail = process.env.BREVO_FROM_EMAIL || '';
+  const brevoFromName = process.env.BREVO_FROM_NAME || 'Resume Verification';
 
-  if (!mailerSendToken) {
-    console.error('MailerSend API Error: MAILERSEND_API_TOKEN is missing.');
-    return res.status(500).json({ error: 'Email service token is not configured on the server.' });
+  if (!brevoApiKey) {
+    console.error('Brevo API Error: BREVO_API_KEY is missing.');
+    return res.status(500).json({ error: 'Email service key is not configured on the server.' });
   }
 
-  if (!mailerSendFrom) {
-    console.error('MailerSend API Error: MAILERSEND_FROM_EMAIL is missing.');
-    return res.status(500).json({ error: 'Email sender address (MAILERSEND_FROM_EMAIL) is not configured on the server.' });
+  if (!brevoFromEmail) {
+    console.error('Brevo API Error: BREVO_FROM_EMAIL is missing.');
+    return res.status(500).json({ error: 'Email sender address (BREVO_FROM_EMAIL) is not configured on the server.' });
   }
-
-  const emailSubject = 'Your Resume Access Verification Code';
-  const emailText = `Hello ${cleanName},\n\nYour 6-digit verification code to confirm your email address for resume access is:\n\nVERIFICATION CODE: ${emailOtp}\n\nThis code will expire in 15 minutes.\n\nThank you,\nGALI VENKATA SIDDHARDHA REDDY\nPortfolio Security System`;
 
   const emailHtml = `
     <div style="font-family: Arial, sans-serif; max-width: 560px; margin: 0 auto; padding: 20px; border: 1px solid #38bdf8; border-radius: 12px; background: #0f172a; color: #ffffff;">
@@ -75,16 +73,17 @@ export default async function handler(req, res) {
   `;
 
   try {
-    const mailerSendRes = await fetch('https://api.mailersend.com/v1/email', {
+    const brevoRes = await fetch('https://api.brevo.com/v3/smtp/email', {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${mailerSendToken}`,
-        'Content-Type': 'application/json',
+        'api-key': brevoApiKey,
+        'accept': 'application/json',
+        'content-type': 'application/json',
       },
       body: JSON.stringify({
-        from: {
-          email: mailerSendFrom,
-          name: 'Resume Verification'
+        sender: {
+          name: brevoFromName,
+          email: brevoFromEmail
         },
         to: [
           {
@@ -92,17 +91,16 @@ export default async function handler(req, res) {
             name: cleanName
           }
         ],
-        subject: emailSubject,
-        text: emailText,
-        html: emailHtml
+        subject: 'Resume Access Verification Code',
+        htmlContent: emailHtml
       })
     });
 
-    const resData = await mailerSendRes.json().catch(() => ({}));
+    const resData = await brevoRes.json().catch(() => ({}));
 
-    if (!mailerSendRes.ok) {
-      console.error('MailerSend API error sending OTP:', mailerSendRes.status, resData);
-      return res.status(mailerSendRes.status || 500).json({
+    if (!brevoRes.ok) {
+      console.error('Brevo API error sending OTP:', brevoRes.status, resData);
+      return res.status(brevoRes.status || 500).json({
         error: resData.message || 'Failed to send verification email. Please verify your recipient email address.'
       });
     }
@@ -113,7 +111,7 @@ export default async function handler(req, res) {
       token: verificationToken
     });
   } catch (error) {
-    console.error('Server error sending visitor email verification code via MailerSend:', error);
+    console.error('Server error sending visitor email verification code via Brevo:', error);
     return res.status(500).json({ error: 'Failed to send verification code to your email.' });
   }
 }
