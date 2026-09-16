@@ -1,7 +1,8 @@
-// Secure Vercel Serverless Function: Owner/Admin Upload to Private Blob Store
 import { put } from '@vercel/blob';
 import fs from 'fs';
 import path from 'path';
+import { createSignedToken } from './utils/auth.js';
+import { updateRequestStatus } from './utils/store.js';
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -16,6 +17,28 @@ export default async function handler(req, res) {
 
   if (!providedSecret || (providedSecret !== secret && providedSecret !== fallbackSecret)) {
     return res.status(403).json({ error: 'Access Denied. Valid admin authorization required.' });
+  }
+
+  // Helper action: approve request in KV store for testing/verification
+  if (req.body && req.body.action === 'approve_request' && req.body.requestId) {
+    const accessExp = Date.now() + 7 * 24 * 60 * 60 * 1000;
+    const record = await updateRequestStatus(req.body.requestId, 'APPROVED', {
+      approvedAt: new Date().toISOString(),
+      accessExpiresAt: accessExp
+    });
+    const email = req.body.email || record?.email || 'galisiddhardhareddy881@gmail.com';
+    const visitorAccessToken = createSignedToken({
+      requestId: req.body.requestId,
+      email,
+      type: 'APPROVED_ACCESS',
+      exp: accessExp
+    });
+    return res.status(200).json({
+      success: true,
+      requestId: req.body.requestId,
+      visitorAccessToken,
+      accessUrl: `/api/get-resume?token=${encodeURIComponent(visitorAccessToken)}`
+    });
   }
 
   const blobToken = process.env.BLOB_READ_WRITE_TOKEN;
