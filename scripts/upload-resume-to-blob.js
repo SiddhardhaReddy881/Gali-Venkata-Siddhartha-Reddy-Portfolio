@@ -26,6 +26,7 @@ async function uploadResume() {
     const blob = await put('private/resume.pdf', fileBuffer, {
       access: 'private',
       addRandomSuffix: false,
+      allowOverwrite: true,
       token: token,
       contentType: 'application/pdf'
     });

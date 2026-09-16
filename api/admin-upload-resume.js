@@ -45,6 +45,7 @@ export default async function handler(req, res) {
     const blob = await put('private/resume.pdf', pdfBuffer, {
       access: 'private',
       addRandomSuffix: false,
+      allowOverwrite: true,
       token: blobToken,
       contentType: 'application/pdf'
     });
